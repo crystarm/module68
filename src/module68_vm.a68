@@ -1,0 +1,168 @@
+MODE regs = [0:7]INT;
+MODE vm = STRUCT(regs r, INT ip, BOOL running);
+
+INT OP_HALT    = 0;
+INT OP_MOV_IMM = 1;
+INT OP_SYS     = 2;
+
+PROC mem_clear = (REF []INT mem) VOID:
+BEGIN
+    FOR i FROM LWB mem TO UPB mem DO
+        mem[i] := 0
+    OD
+END;
+
+PROC load_demo = (REF []INT mem) INT:
+BEGIN
+    INT p := 0;
+    PROC emit = (INT x) VOID:
+    BEGIN
+        mem[p] := x;
+        p +:= 1
+    END;
+
+    emit(OP_MOV_IMM); emit(0); emit(72);
+    emit(OP_SYS); emit(1);
+
+    emit(OP_MOV_IMM); emit(0); emit(105);
+    emit(OP_SYS); emit(1);
+
+    emit(OP_MOV_IMM); emit(0); emit(10);
+    emit(OP_SYS); emit(1);
+
+    emit(OP_HALT);
+
+    p
+END;
+
+PROC load_m68 = (STRING path, REF []INT mem, REF INT code_sz) BOOL:
+BEGIN
+    FILE f;
+    INT status := open(f, path, stand in channel);
+    IF status /= 0 THEN
+        put(stand error, ("cannot open ", path, new line));
+        FALSE
+    ELSE
+        BOOL eof := FALSE;
+        on logical file end(f, (REF FILE inf) BOOL:
+        BEGIN
+            eof := TRUE;
+            close(inf);
+            done
+        END);
+
+        PROC rd = (REF INT x) BOOL:
+        BEGIN
+            IF eof THEN
+                FALSE
+            ELSE
+                get(f, x);
+                NOT eof
+            FI
+        END;
+
+        INT b0, b1, b2, b3;
+        INT ver, flags, sz_hi, sz_lo;
+
+        IF NOT rd(b0) OR NOT rd(b1) OR NOT rd(b2) OR NOT rd(b3) THEN
+            put(stand error, ("bad header (eof)", new line));
+            FALSE
+        ELIF b0 /= 77 OR b1 /= 54 OR b2 /= 56 OR b3 /= 33 THEN
+            put(stand error, ("bad magic", new line));
+            close(f);
+            FALSE
+        ELIF NOT rd(ver) OR NOT rd(flags) OR NOT rd(sz_hi) OR NOT rd(sz_lo) THEN
+            put(stand error, ("bad header (short)", new line));
+            FALSE
+        ELSE
+            code_sz := sz_hi * 256 + sz_lo;
+            IF code_sz < 0 OR code_sz > UPB mem - LWB mem + 1 THEN
+                put(stand error, ("bad code size", new line));
+                close(f);
+                FALSE
+            ELSE
+                FOR i FROM 0 TO code_sz - 1 DO
+                    INT x;
+                    IF NOT rd(x) THEN
+                        put(stand error, ("unexpected eof in code", new line));
+                        RETURN FALSE
+                    FI;
+                    mem[i] := x
+                OD;
+                close(f);
+                TRUE
+            FI
+        FI
+    FI
+END;
+
+PROC vm_step = (REF vm s, REF []INT mem) VOID:
+BEGIN
+    INT op := mem[s.ip];
+    s.ip +:= 1;
+
+    CASE op IN
+        OP_HALT:
+            s.running := FALSE,
+
+        OP_MOV_IMM:
+        BEGIN
+            INT a := mem[s.ip];
+            INT imm := mem[s.ip + 1];
+            s.ip +:= 2;
+            IF a < LWB s.r OR a > UPB s.r THEN
+                s.running := FALSE
+            ELSE
+                s.r[a] := imm
+            FI
+        END,
+
+        OP_SYS:
+        BEGIN
+            INT n := mem[s.ip];
+            s.ip +:= 1;
+            CASE n IN
+                1: print((REPR s.r[0]))
+            OUT
+                skip
+            ESAC
+        END
+    OUT
+        s.running := FALSE
+    ESAC
+END;
+
+BEGIN
+    INT memsz := 65536;
+    REF []INT mem := HEAP [0:memsz - 1]INT;
+    mem_clear(mem);
+
+    INT code_sz := 0;
+    BOOL ok := FALSE;
+
+    IF argc >= 4 THEN
+        STRING path := argv(4);
+        ok := load_m68(path, mem, code_sz)
+    FI;
+
+    IF NOT ok THEN
+        code_sz := load_demo(mem)
+    FI;
+
+    regs r := (0, 0, 0, 0, 0, 0, 0, 0);
+    vm s := (r, 0, TRUE);
+
+    INT steps := 0;
+    INT max_steps := 10000000;
+
+    WHILE s.running AND steps < max_steps DO
+        vm_step(s, mem);
+        steps +:= 1
+    OD;
+
+    IF steps >= max_steps THEN
+        put(stand error, ("max steps reached", new line))
+    FI;
+
+    0
+END
