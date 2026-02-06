@@ -1,168 +1,256 @@
-MODE regs = [0:7]INT;
-MODE vm = STRUCT(regs r, INT ip, BOOL running);
+INT ophlt := 0;
+INT opmovimm := 1;
+INT opsys := 2;
 
-INT OP_HALT    = 0;
-INT OP_MOV_IMM = 1;
-INT OP_SYS     = 2;
-
-PROC mem_clear = (REF []INT mem) VOID:
+PROC memclear = (REF []INT mem) VOID:
 BEGIN
     FOR i FROM LWB mem TO UPB mem DO
         mem[i] := 0
     OD
 END;
 
-PROC load_demo = (REF []INT mem) INT:
+PROC regsreset = (REF []INT r) VOID:
+BEGIN
+    FOR i FROM LWB r TO UPB r DO
+        r[i] := 0
+    OD
+END;
+
+PROC loaddemo = (REF []INT mem) INT:
 BEGIN
     INT p := 0;
+
     PROC emit = (INT x) VOID:
     BEGIN
         mem[p] := x;
-        p +:= 1
+        p := p + 1
     END;
 
-    emit(OP_MOV_IMM); emit(0); emit(72);
-    emit(OP_SYS); emit(1);
+    emit(opmovimm); emit(0); emit(72);
+    emit(opsys); emit(1);
 
-    emit(OP_MOV_IMM); emit(0); emit(105);
-    emit(OP_SYS); emit(1);
+    emit(opmovimm); emit(0); emit(105);
+    emit(opsys); emit(1);
 
-    emit(OP_MOV_IMM); emit(0); emit(10);
-    emit(OP_SYS); emit(1);
+    emit(opmovimm); emit(0); emit(10);
+    emit(opsys); emit(1);
 
-    emit(OP_HALT);
+    emit(ophlt);
 
     p
 END;
 
-PROC load_m68 = (STRING path, REF []INT mem, REF INT code_sz) BOOL:
+PROC streq = (STRING a, STRING b) BOOL:
+BEGIN
+    INT al := LWB a;
+    INT au := UPB a;
+    INT bl := LWB b;
+    INT bu := UPB b;
+
+    IF au - al /= bu - bl THEN
+        FALSE
+    ELSE
+        BOOL ok := TRUE;
+        INT i := 0;
+        WHILE ok AND i <= au - al DO
+            ok := a[al + i] = b[bl + i];
+            i := i + 1
+        OD;
+        ok
+    FI
+END;
+
+PROC ism68 = (STRING s) BOOL:
+BEGIN
+    INT l := LWB s;
+    INT u := UPB s;
+
+    STRING t := ".m68";
+    INT tl := LWB t;
+
+    IF u - l + 1 < 4 THEN
+        FALSE
+    ELSE
+        s[u - 3] = t[tl] AND
+        s[u - 2] = t[tl + 1] AND
+        s[u - 1] = t[tl + 2] AND
+        s[u] = t[tl + 3]
+    FI
+END;
+
+PROC loadm68 = (STRING path, REF []INT mem, REF INT codesz) BOOL:
 BEGIN
     FILE f;
     INT status := open(f, path, stand in channel);
+
     IF status /= 0 THEN
-        put(stand error, ("cannot open ", path, new line));
         FALSE
     ELSE
-        BOOL eof := FALSE;
-        on logical file end(f, (REF FILE inf) BOOL:
+        BOOL eoflag := FALSE;
+        BOOL bad := FALSE;
+
+        on logical file end(f, (REF FILE infile) BOOL:
         BEGIN
-            eof := TRUE;
-            close(inf);
-            done
+            eoflag := TRUE;
+            TRUE
+        END);
+
+        on value error(f, (REF FILE infile) BOOL:
+        BEGIN
+            bad := TRUE;
+            TRUE
         END);
 
         PROC rd = (REF INT x) BOOL:
         BEGIN
-            IF eof THEN
+            IF eoflag OR bad THEN
                 FALSE
             ELSE
                 get(f, x);
-                NOT eof
+                NOT (eoflag OR bad)
             FI
         END;
 
-        INT b0, b1, b2, b3;
-        INT ver, flags, sz_hi, sz_lo;
+        BOOL ok := TRUE;
 
-        IF NOT rd(b0) OR NOT rd(b1) OR NOT rd(b2) OR NOT rd(b3) THEN
-            put(stand error, ("bad header (eof)", new line));
-            FALSE
-        ELIF b0 /= 77 OR b1 /= 54 OR b2 /= 56 OR b3 /= 33 THEN
-            put(stand error, ("bad magic", new line));
+        INT b0, b1, b2, b3;
+        INT ver, flags, szhi, szlo;
+
+        IF ok THEN ok := rd(b0) FI;
+        IF ok THEN ok := rd(b1) FI;
+        IF ok THEN ok := rd(b2) FI;
+        IF ok THEN ok := rd(b3) FI;
+
+        IF NOT ok THEN
             close(f);
             FALSE
-        ELIF NOT rd(ver) OR NOT rd(flags) OR NOT rd(sz_hi) OR NOT rd(sz_lo) THEN
-            put(stand error, ("bad header (short)", new line));
+        ELIF b0 /= 77 OR b1 /= 54 OR b2 /= 56 OR b3 /= 33 THEN
+            close(f);
             FALSE
         ELSE
-            code_sz := sz_hi * 256 + sz_lo;
-            IF code_sz < 0 OR code_sz > UPB mem - LWB mem + 1 THEN
-                put(stand error, ("bad code size", new line));
+            ok := rd(ver);
+            IF ok THEN ok := rd(flags) FI;
+            IF ok THEN ok := rd(szhi) FI;
+            IF ok THEN ok := rd(szlo) FI;
+
+            IF NOT ok THEN
                 close(f);
                 FALSE
             ELSE
-                FOR i FROM 0 TO code_sz - 1 DO
-                    INT x;
-                    IF NOT rd(x) THEN
-                        put(stand error, ("unexpected eof in code", new line));
-                        RETURN FALSE
-                    FI;
-                    mem[i] := x
-                OD;
-                close(f);
-                TRUE
+                codesz := szhi * 256 + szlo;
+
+                IF codesz < 0 OR codesz > UPB mem - LWB mem + 1 THEN
+                    close(f);
+                    FALSE
+                ELSE
+                    INT i := 0;
+                    WHILE ok AND i < codesz DO
+                        INT x;
+                        ok := rd(x);
+                        IF ok THEN
+                            mem[i] := x
+                        FI;
+                        i := i + 1
+                    OD;
+
+                    close(f);
+                    ok
+                FI
             FI
         FI
     FI
 END;
 
-PROC vm_step = (REF vm s, REF []INT mem) VOID:
+PROC vmstep = (REF []INT r, REF INT ip, REF BOOL running, REF []INT mem, BOOL trace) VOID:
 BEGIN
-    INT op := mem[s.ip];
-    s.ip +:= 1;
+    INT ip0 := ip;
+    INT op := mem[ip];
+    ip := ip + 1;
 
-    CASE op IN
-        OP_HALT:
-            s.running := FALSE,
+    IF trace THEN
+        put(stand error, ("ip=", whole(ip0, 0),
+                         " op=", whole(op, 0),
+                         " r0=", whole(r[0], 0),
+                         " r1=", whole(r[1], 0),
+                         " r2=", whole(r[2], 0),
+                         " r3=", whole(r[3], 0),
+                         new line))
+    FI;
 
-        OP_MOV_IMM:
-        BEGIN
-            INT a := mem[s.ip];
-            INT imm := mem[s.ip + 1];
-            s.ip +:= 2;
-            IF a < LWB s.r OR a > UPB s.r THEN
-                s.running := FALSE
-            ELSE
-                s.r[a] := imm
-            FI
-        END,
+    IF op = ophlt THEN
+        running := FALSE
+    ELIF op = opmovimm THEN
+    BEGIN
+        INT a := mem[ip];
+        INT imm := mem[ip + 1];
+        ip := ip + 2;
 
-        OP_SYS:
-        BEGIN
-            INT n := mem[s.ip];
-            s.ip +:= 1;
-            CASE n IN
-                1: print((REPR s.r[0]))
-            OUT
-                skip
-            ESAC
-        END
-    OUT
-        s.running := FALSE
-    ESAC
+        IF a < LWB r OR a > UPB r THEN
+            running := FALSE
+        ELSE
+            r[a] := imm
+        FI
+    END
+    ELIF op = opsys THEN
+    BEGIN
+        INT n := mem[ip];
+        ip := ip + 1;
+
+        IF n = 0 THEN
+            print((whole(r[0], 0)))
+        ELIF n = 1 THEN
+            print((REPR r[0]))
+        FI
+    END
+    ELSE
+        running := FALSE
+    FI
 END;
 
 BEGIN
     INT memsz := 65536;
-    REF []INT mem := HEAP [0:memsz - 1]INT;
-    mem_clear(mem);
 
-    INT code_sz := 0;
+    REF []INT mem;
+    mem := HEAP [0:memsz - 1]INT;
+    memclear(mem);
+
+    INT codesz := 0;
     BOOL ok := FALSE;
+    BOOL trace := FALSE;
 
-    IF argc >= 4 THEN
-        STRING path := argv(4);
-        ok := load_m68(path, mem, code_sz)
+    IF argc > 0 THEN
+        FOR i FROM 1 TO argc DO
+            STRING arg := argv(i);
+            IF streq(arg, "--trace") THEN
+                trace := TRUE
+            ELIF NOT ok AND ism68(arg) THEN
+                ok := loadm68(arg, mem, codesz)
+            FI
+        OD
     FI;
 
     IF NOT ok THEN
-        code_sz := load_demo(mem)
+        codesz := loaddemo(mem)
     FI;
 
-    regs r := (0, 0, 0, 0, 0, 0, 0, 0);
-    vm s := (r, 0, TRUE);
+    REF []INT r;
+    r := HEAP [0:7]INT;
+    regsreset(r);
+
+    INT ip := 0;
+    BOOL running := TRUE;
 
     INT steps := 0;
-    INT max_steps := 10000000;
+    INT maxsteps := 10000000;
 
-    WHILE s.running AND steps < max_steps DO
-        vm_step(s, mem);
-        steps +:= 1
+    WHILE running AND steps < maxsteps DO
+        vmstep(r, ip, running, mem, trace);
+        steps := steps + 1
     OD;
 
-    IF steps >= max_steps THEN
+    IF steps >= maxsteps THEN
         put(stand error, ("max steps reached", new line))
     FI;
 
-    0
+    SKIP
 END
