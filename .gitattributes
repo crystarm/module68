@@ -1,2 +1,3 @@
 
-*.a86 linguist-language=ALGOL
+*.a68 linguist-language=ALGOL
+*.asm linguist-language=Assembly
