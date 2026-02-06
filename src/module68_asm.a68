@@ -1,0 +1,344 @@
+PROC streq = (STRING a, STRING b) BOOL:
+BEGIN
+    INT la := UPB a - LWB a + 1;
+    INT lb := UPB b - LWB b + 1;
+
+    IF la /= lb THEN
+        FALSE
+    ELSE
+        BOOL ok := TRUE;
+        INT i := 0;
+        WHILE ok AND i < la DO
+            ok := a[LWB a + i] = b[LWB b + i];
+            i := i + 1
+        OD;
+        ok
+    FI
+END;
+
+PROC hasext = (STRING s, STRING ext) BOOL:
+BEGIN
+    INT ls := UPB s - LWB s + 1;
+    INT le := UPB ext - LWB ext + 1;
+
+    IF ls < le THEN
+        FALSE
+    ELSE
+        BOOL ok := TRUE;
+        INT i := 0;
+        WHILE ok AND i < le DO
+            ok := s[UPB s - le + 1 + i] = ext[LWB ext + i];
+            i := i + 1
+        OD;
+        ok
+    FI
+END;
+
+PROC strip_comment = (STRING s) STRING:
+BEGIN
+    INT cut := 0;
+
+    FOR i FROM LWB s TO UPB s DO
+        IF cut = 0 AND ABS s[i] = 59 THEN
+            cut := i - 1
+        FI
+    OD;
+
+    IF cut = 0 THEN
+        s
+    ELSE
+        s[LWB s:cut]
+    FI
+END;
+
+PROC issep = (CHAR c) BOOL:
+    ABS c = 32 OR ABS c = 9 OR ABS c = 44;
+
+PROC next_tok = (STRING s, REF INT p, REF BOOL any) STRING:
+BEGIN
+    INT u := UPB s;
+
+    BOOL done := FALSE;
+    WHILE p <= u AND NOT done DO
+        IF issep(s[p]) THEN
+            p := p + 1
+        ELSE
+            done := TRUE
+        FI
+    OD;
+
+    IF p > u THEN
+        any := FALSE;
+        ""
+    ELSE
+        INT q := p;
+        BOOL done2 := FALSE;
+
+        WHILE q <= u AND NOT done2 DO
+            IF issep(s[q]) THEN
+                done2 := TRUE
+            ELSE
+                q := q + 1
+            FI
+        OD;
+
+        any := TRUE;
+        STRING tok := s[p:q - 1];
+        p := q;
+        tok
+    FI
+END;
+
+PROC parse_uint = (STRING s, REF INT v) BOOL:
+BEGIN
+    INT p := LWB s;
+    INT u := UPB s;
+
+    IF p > u THEN
+        FALSE
+    ELSE
+        INT x := 0;
+        BOOL ok := TRUE;
+
+        FOR i FROM p TO u DO
+            INT a := ABS s[i];
+            IF a < 48 OR a > 57 THEN
+                ok := FALSE
+            ELSE
+                x := x * 10 + (a - 48)
+            FI
+        OD;
+
+        IF ok THEN
+            v := x
+        FI;
+
+        ok
+    FI
+END;
+
+PROC parse_int = (STRING s, REF INT v) BOOL:
+BEGIN
+    INT p := LWB s;
+    INT u := UPB s;
+
+    IF p > u THEN
+        FALSE
+    ELIF ABS s[p] = 45 THEN
+        INT x;
+        BOOL ok := parse_uint(s[p + 1:u], x);
+        IF ok THEN
+            v := -x
+        FI;
+        ok
+    ELSE
+        parse_uint(s, v)
+    FI
+END;
+
+PROC parse_reg = (STRING s, REF INT r) BOOL:
+BEGIN
+    INT p := LWB s;
+    INT u := UPB s;
+
+    IF u - p + 1 < 2 THEN
+        FALSE
+    ELIF ABS s[p] /= 114 THEN
+        FALSE
+    ELSE
+        INT x;
+        BOOL ok := parse_uint(s[p + 1:u], x);
+        IF ok AND x >= 0 AND x <= 7 THEN
+            r := x;
+            TRUE
+        ELSE
+            FALSE
+        FI
+    FI
+END;
+
+PROC emit = (REF []INT code, REF INT sz, INT x) VOID:
+BEGIN
+    IF sz >= LWB code AND sz <= UPB code THEN
+        code[sz] := x;
+        sz := sz + 1
+    FI
+END;
+
+PROC write_m68 = (STRING outpath, REF []INT code, INT codesz) BOOL:
+BEGIN
+    FILE out;
+    INT status := open(out, outpath, stand out channel);
+
+    IF status /= 0 THEN
+        put(stand error, ("cannot open output ", outpath, new line));
+        FALSE
+    ELSE
+        INT ver := 1;
+        INT flags := 0;
+        INT szhi := codesz OVER 256;
+        INT szlo := codesz - szhi * 256;
+
+        INT i := 0;
+        INT col := 0;
+
+        PROC put_i = (INT x) VOID:
+        BEGIN
+            put(out, (whole(x, 0), " "));
+            col := col + 1;
+            IF col >= 16 THEN
+                put(out, (new line));
+                col := 0
+            FI
+        END;
+
+        put_i(77); put_i(54); put_i(56); put_i(33);
+        put_i(ver); put_i(flags); put_i(szhi); put_i(szlo);
+
+        WHILE i < codesz DO
+            put_i(code[i]);
+            i := i + 1
+        OD;
+
+        IF col /= 0 THEN
+            put(out, (new line))
+        FI;
+
+        close(out);
+        TRUE
+    FI
+END;
+
+BEGIN
+    STRING asmext := ".asm";
+    STRING m68ext := ".m68";
+
+    STRING inpath := "";
+    STRING outpath := "";
+
+    BOOL havein := FALSE;
+    BOOL haveout := FALSE;
+    BOOL want_trace := FALSE;
+
+    IF argc > 0 THEN
+        FOR i FROM 1 TO argc DO
+            STRING a := argv(i);
+
+            IF streq(a, "--trace") THEN
+                want_trace := TRUE
+            ELIF NOT havein AND hasext(a, asmext) THEN
+                inpath := a;
+                havein := TRUE
+            ELIF NOT haveout AND hasext(a, m68ext) THEN
+                outpath := a;
+                haveout := TRUE
+            FI
+        OD
+    FI;
+
+    IF NOT havein THEN
+        put(stand error, ("usage: a68g src/module68_asm.a68 -- input.asm [output.m68]", new line));
+        put(stand error, ("supports: mov rN, IMM | sys N | halt", new line));
+        put(stand error, ("flags: --trace (prints parsed instructions)", new line));
+        SKIP
+    ELSE
+        IF NOT haveout THEN
+            INT l := LWB inpath;
+            INT u := UPB inpath;
+            outpath := inpath[l:u - 4] + m68ext
+        FI;
+
+        FILE in;
+        INT status := open(in, inpath, stand in channel);
+
+        IF status /= 0 THEN
+            put(stand error, ("cannot open input ", inpath, new line));
+            SKIP
+        ELSE
+            BOOL eoflag := FALSE;
+
+            on logical file end(in, (REF FILE infile) BOOL:
+            BEGIN
+                eoflag := TRUE;
+                TRUE
+            END);
+
+            INT maxcode := 65536;
+            REF []INT code;
+            code := HEAP [0:maxcode - 1]INT;
+
+            INT sz := 0;
+            INT lineno := 0;
+
+            WHILE NOT eoflag DO
+                STRING raw;
+                get(in, (raw, new line));
+                lineno := lineno + 1;
+
+                IF NOT eoflag THEN
+                    STRING line := strip_comment(raw);
+                    INT p := LWB line;
+                    BOOL any := FALSE;
+
+                    STRING op := next_tok(line, p, any);
+
+                    IF any THEN
+                        IF streq(op, "halt") THEN
+                            emit(code, sz, 0);
+                            IF want_trace THEN
+                                put(stand error, ("[", whole(lineno,0), "] halt", new line))
+                            FI
+                        ELIF streq(op, "mov") THEN
+                            BOOL any2 := FALSE;
+                            STRING a1 := next_tok(line, p, any2);
+
+                            BOOL any3 := FALSE;
+                            STRING a2 := next_tok(line, p, any3);
+
+                            INT r;
+                            INT imm;
+
+                            IF any2 AND any3 AND parse_reg(a1, r) AND parse_int(a2, imm) THEN
+                                emit(code, sz, 1);
+                                emit(code, sz, r);
+                                emit(code, sz, imm);
+
+                                IF want_trace THEN
+                                    put(stand error, ("[", whole(lineno,0), "] mov r", whole(r,0), ", ", whole(imm,0), new line))
+                                FI
+                            ELSE
+                                put(stand error, ("line ", whole(lineno,0), ": bad mov", new line))
+                            FI
+                        ELIF streq(op, "sys") THEN
+                            BOOL any2 := FALSE;
+                            STRING a1 := next_tok(line, p, any2);
+
+                            INT n;
+
+                            IF any2 AND parse_int(a1, n) THEN
+                                emit(code, sz, 2);
+                                emit(code, sz, n);
+
+                                IF want_trace THEN
+                                    put(stand error, ("[", whole(lineno,0), "] sys ", whole(n,0), new line))
+                                FI
+                            ELSE
+                                put(stand error, ("line ", whole(lineno,0), ": bad sys", new line))
+                            FI
+                        ELSE
+                            put(stand error, ("line ", whole(lineno,0), ": unknown op ", op, new line))
+                        FI
+                    FI
+                FI
+            OD;
+
+            close(in);
+
+            IF write_m68(outpath, code, sz) THEN
+                put(stand out, ("wrote ", outpath, " (", whole(sz,0), " ints)", new line))
+            FI;
+
+            SKIP
+        FI
+    FI
+END
