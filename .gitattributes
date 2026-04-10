@@ -1,3 +1,7 @@
 
 *.a68 linguist-language=ALGOL
 *.asm linguist-language=Assembly
+
+examples/**/*.asm -linguist-documentation
+examples/**/*.asm -linguist-vendored
+examples/**/*.asm -linguist-generated
