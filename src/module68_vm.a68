@@ -2,6 +2,17 @@ INT ophlt := 0;
 INT opmovimm := 1;
 INT opsys := 2;
 
+MODE CPUSTATE = STRUCT(
+    [0:63]INT r,
+    INT sp,
+    INT fp,
+    INT fl,
+    INT jt,
+    INT jc,
+    INT sr,
+    INT pc
+);
+
 PROC memclear = (REF []INT mem) VOID:
 BEGIN
     FOR i FROM LWB mem TO UPB mem DO
@@ -9,11 +20,19 @@ BEGIN
     OD
 END;
 
-PROC regsreset = (REF []INT r) VOID:
+PROC cpureset = (REF CPUSTATE cpu) VOID:
 BEGIN
-    FOR i FROM LWB r TO UPB r DO
-        r[i] := 0
-    OD
+    FOR i FROM LWB cpu.r TO UPB cpu.r DO
+        cpu.r[i] := 0
+    OD;
+
+    cpu.sp := 0;
+    cpu.fp := 0;
+    cpu.fl := 0;
+    cpu.jt := 0;
+    cpu.jc := 0;
+    cpu.sr := 0;
+    cpu.pc := 0
 END;
 
 PROC loaddemo = (REF []INT mem) INT:
@@ -161,49 +180,68 @@ BEGIN
     FI
 END;
 
-PROC vmstep = (REF []INT r, REF INT ip, REF BOOL running, REF []INT mem, BOOL trace) VOID:
+PROC vmstep = (REF CPUSTATE cpu, REF BOOL running, REF []INT mem, BOOL trace) VOID:
 BEGIN
-    INT ip0 := ip;
-    INT op := mem[ip];
-    ip := ip + 1;
-
-    IF trace THEN
-        put(stand error, ("ip=", whole(ip0, 0),
-                         " op=", whole(op, 0),
-                         " r0=", whole(r[0], 0),
-                         " r1=", whole(r[1], 0),
-                         " r2=", whole(r[2], 0),
-                         " r3=", whole(r[3], 0),
-                         new line))
-    FI;
-
-    IF op = ophlt THEN
+    IF cpu.pc < LWB mem OR cpu.pc > UPB mem THEN
         running := FALSE
-    ELIF op = opmovimm THEN
-    BEGIN
-        INT a := mem[ip];
-        INT imm := mem[ip + 1];
-        ip := ip + 2;
-
-        IF a < LWB r OR a > UPB r THEN
-            running := FALSE
-        ELSE
-            r[a] := imm
-        FI
-    END
-    ELIF op = opsys THEN
-    BEGIN
-        INT n := mem[ip];
-        ip := ip + 1;
-
-        IF n = 0 THEN
-            print((whole(r[0], 0)))
-        ELIF n = 1 THEN
-            print((REPR r[0]))
-        FI
-    END
     ELSE
-        running := FALSE
+        INT pc0 := cpu.pc;
+        INT op := mem[cpu.pc];
+        cpu.pc := cpu.pc + 1;
+
+        IF trace THEN
+            put(stand error, ("pc=", whole(pc0, 0),
+                             " op=", whole(op, 0),
+                             " r0=", whole(cpu.r[0], 0),
+                             " r1=", whole(cpu.r[1], 0),
+                             " r2=", whole(cpu.r[2], 0),
+                             " r3=", whole(cpu.r[3], 0),
+                             " sp=", whole(cpu.sp, 0),
+                             " fp=", whole(cpu.fp, 0),
+                             " fl=", whole(cpu.fl, 0),
+                             " jt=", whole(cpu.jt, 0),
+                             " jc=", whole(cpu.jc, 0),
+                             " sr=", whole(cpu.sr, 0),
+                             new line))
+        FI;
+
+        IF op = ophlt THEN
+            running := FALSE
+        ELIF op = opmovimm THEN
+        BEGIN
+            IF cpu.pc + 1 > UPB mem THEN
+                running := FALSE
+            ELSE
+                INT a := mem[cpu.pc];
+                INT imm := mem[cpu.pc + 1];
+                cpu.pc := cpu.pc + 2;
+
+                IF a < LWB cpu.r OR a > UPB cpu.r THEN
+                    running := FALSE
+                ELSE
+                    cpu.r[a] := imm
+                FI
+            FI
+        END
+        ELIF op = opsys THEN
+        BEGIN
+            IF cpu.pc > UPB mem THEN
+                running := FALSE
+            ELSE
+                INT n := mem[cpu.pc];
+                cpu.pc := cpu.pc + 1;
+                cpu.sr := n;
+
+                IF n = 0 THEN
+                    print((whole(cpu.r[0], 0)))
+                ELIF n = 1 THEN
+                    print((REPR cpu.r[0]))
+                FI
+            FI
+        END
+        ELSE
+            running := FALSE
+        FI
     FI
 END;
 
@@ -233,18 +271,16 @@ BEGIN
         codesz := loaddemo(mem)
     FI;
 
-    REF []INT r;
-    r := HEAP [0:7]INT;
-    regsreset(r);
+    CPUSTATE cpu;
+    cpureset(cpu);
 
-    INT ip := 0;
     BOOL running := TRUE;
 
     INT steps := 0;
     INT maxsteps := 10000000;
 
     WHILE running AND steps < maxsteps DO
-        vmstep(r, ip, running, mem, trace);
+        vmstep(cpu, running, mem, trace);
         steps := steps + 1
     OD;
 
