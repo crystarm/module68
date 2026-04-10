@@ -13,36 +13,156 @@ MODE CPUSTATE = STRUCT(
     INT pc
 );
 
-PROC memclear = (REF []INT mem) VOID:
+MODE MEMORYMODEL = STRUCT(
+    REF []INT bytes,
+    INT total_size,
+    INT code_base,
+    INT code_size,
+    INT data_base,
+    INT data_size,
+    INT stack_base,
+    INT stack_size
+);
+
+PROC streq = (STRING a, STRING b) BOOL:
 BEGIN
-    FOR i FROM LWB mem TO UPB mem DO
-        mem[i] := 0
+    INT la := UPB a - LWB a + 1;
+    INT lb := UPB b - LWB b + 1;
+
+    IF la /= lb THEN
+        FALSE
+    ELSE
+        BOOL ok := TRUE;
+        INT i := 0;
+        WHILE ok AND i < la DO
+            ok := a[LWB a + i] = b[LWB b + i];
+            i := i + 1
+        OD;
+        ok
+    FI
+END;
+
+PROC parse_uint = (STRING s, REF INT v) BOOL:
+BEGIN
+    INT l := LWB s;
+    INT u := UPB s;
+
+    IF l > u THEN
+        FALSE
+    ELSE
+        INT x := 0;
+        BOOL ok := TRUE;
+
+        FOR i FROM l TO u DO
+            INT a := ABS s[i];
+            IF a < 48 OR a > 57 THEN
+                ok := FALSE
+            ELSE
+                x := x * 10 + (a - 48)
+            FI
+        OD;
+
+        IF ok THEN v := x FI;
+        ok
+    FI
+END;
+
+PROC ism68 = (STRING s) BOOL:
+BEGIN
+    INT l := LWB s;
+    INT u := UPB s;
+
+    STRING ext := ".m68";
+    INT e := LWB ext;
+
+    IF u - l + 1 < 4 THEN
+        FALSE
+    ELSE
+        s[u - 3] = ext[e] AND
+        s[u - 2] = ext[e + 1] AND
+        s[u - 1] = ext[e + 2] AND
+        s[u] = ext[e + 3]
+    FI
+END;
+
+PROC memclear = (REF MEMORYMODEL mem) VOID:
+BEGIN
+    FOR i FROM LWB mem.bytes TO UPB mem.bytes DO
+        mem.bytes[i] := 0
     OD
 END;
 
-PROC cpureset = (REF CPUSTATE cpu) VOID:
+PROC meminit = (REF MEMORYMODEL mem, INT code_sz, INT data_sz, INT stack_sz) BOOL:
+BEGIN
+    IF code_sz <= 0 OR data_sz <= 0 OR stack_sz <= 0 THEN
+        FALSE
+    ELSE
+        mem.code_base := 0;
+        mem.code_size := code_sz;
+
+        mem.data_base := mem.code_base + mem.code_size;
+        mem.data_size := data_sz;
+
+        mem.stack_base := mem.data_base + mem.data_size;
+        mem.stack_size := stack_sz;
+
+        mem.total_size := mem.stack_base + mem.stack_size;
+
+        mem.bytes := HEAP [0:mem.total_size - 1]INT;
+        memclear(mem);
+        TRUE
+    FI
+END;
+
+PROC in_segment = (INT addr, INT base, INT sz) BOOL:
+    addr >= base AND addr < base + sz;
+
+PROC mem_read8 = (REF MEMORYMODEL mem, INT addr, REF INT v) BOOL:
+BEGIN
+    IF addr < LWB mem.bytes OR addr > UPB mem.bytes THEN
+        FALSE
+    ELSE
+        v := mem.bytes[addr];
+        TRUE
+    FI
+END;
+
+PROC mem_write8 = (REF MEMORYMODEL mem, INT addr, INT v) BOOL:
+BEGIN
+    IF addr < LWB mem.bytes OR addr > UPB mem.bytes THEN
+        FALSE
+    ELSE
+        mem.bytes[addr] := v;
+        TRUE
+    FI
+END;
+
+PROC cpureset = (REF CPUSTATE cpu, REF MEMORYMODEL mem) VOID:
 BEGIN
     FOR i FROM LWB cpu.r TO UPB cpu.r DO
         cpu.r[i] := 0
     OD;
 
-    cpu.sp := 0;
-    cpu.fp := 0;
+    cpu.sp := mem.stack_base + mem.stack_size;
+    cpu.fp := cpu.sp;
     cpu.fl := 0;
     cpu.jt := 0;
     cpu.jc := 0;
     cpu.sr := 0;
-    cpu.pc := 0
+    cpu.pc := mem.code_base
 END;
 
-PROC loaddemo = (REF []INT mem) INT:
+PROC loaddemo = (REF MEMORYMODEL mem) INT:
 BEGIN
-    INT p := 0;
+    INT p := mem.code_base;
+    INT p_end := mem.code_base + mem.code_size;
 
     PROC emit = (INT x) VOID:
     BEGIN
-        mem[p] := x;
-        p := p + 1
+        IF p < p_end THEN
+            mem.bytes[p] := x;
+            p := p + 1
+        FI
     END;
 
     emit(opmovimm); emit(0); emit(72);
@@ -56,48 +176,10 @@ BEGIN
 
     emit(ophlt);
 
-    p
+    p - mem.code_base
 END;
 
-PROC streq = (STRING a, STRING b) BOOL:
-BEGIN
-    INT al := LWB a;
-    INT au := UPB a;
-    INT bl := LWB b;
-    INT bu := UPB b;
-
-    IF au - al /= bu - bl THEN
-        FALSE
-    ELSE
-        BOOL ok := TRUE;
-        INT i := 0;
-        WHILE ok AND i <= au - al DO
-            ok := a[al + i] = b[bl + i];
-            i := i + 1
-        OD;
-        ok
-    FI
-END;
-
-PROC ism68 = (STRING s) BOOL:
-BEGIN
-    INT l := LWB s;
-    INT u := UPB s;
-
-    STRING t := ".m68";
-    INT tl := LWB t;
-
-    IF u - l + 1 < 4 THEN
-        FALSE
-    ELSE
-        s[u - 3] = t[tl] AND
-        s[u - 2] = t[tl + 1] AND
-        s[u - 1] = t[tl + 2] AND
-        s[u] = t[tl + 3]
-    FI
-END;
-
-PROC loadm68 = (STRING path, REF []INT mem, REF INT codesz) BOOL:
+PROC loadm68 = (STRING path, REF MEMORYMODEL mem, REF INT codesz) BOOL:
 BEGIN
     FILE f;
     INT status := open(f, path, stand in channel);
@@ -158,7 +240,7 @@ BEGIN
             ELSE
                 codesz := szhi * 256 + szlo;
 
-                IF codesz < 0 OR codesz > UPB mem - LWB mem + 1 THEN
+                IF codesz < 0 OR codesz > mem.code_size THEN
                     close(f);
                     FALSE
                 ELSE
@@ -167,7 +249,7 @@ BEGIN
                         INT x;
                         ok := rd(x);
                         IF ok THEN
-                            mem[i] := x
+                            ok := mem_write8(mem, mem.code_base + i, x)
                         FI;
                         i := i + 1
                     OD;
@@ -180,113 +262,168 @@ BEGIN
     FI
 END;
 
-PROC vmstep = (REF CPUSTATE cpu, REF BOOL running, REF []INT mem, BOOL trace) VOID:
+PROC vmstep = (REF CPUSTATE cpu, REF BOOL running, REF MEMORYMODEL mem, BOOL trace) VOID:
 BEGIN
-    IF cpu.pc < LWB mem OR cpu.pc > UPB mem THEN
+    IF NOT in_segment(cpu.pc, mem.code_base, mem.code_size) THEN
         running := FALSE
     ELSE
         INT pc0 := cpu.pc;
-        INT op := mem[cpu.pc];
-        cpu.pc := cpu.pc + 1;
+        INT op := 0;
+        BOOL ok := mem_read8(mem, cpu.pc, op);
 
-        IF trace THEN
-            put(stand error, ("pc=", whole(pc0, 0),
-                             " op=", whole(op, 0),
-                             " r0=", whole(cpu.r[0], 0),
-                             " r1=", whole(cpu.r[1], 0),
-                             " r2=", whole(cpu.r[2], 0),
-                             " r3=", whole(cpu.r[3], 0),
-                             " sp=", whole(cpu.sp, 0),
-                             " fp=", whole(cpu.fp, 0),
-                             " fl=", whole(cpu.fl, 0),
-                             " jt=", whole(cpu.jt, 0),
-                             " jc=", whole(cpu.jc, 0),
-                             " sr=", whole(cpu.sr, 0),
-                             new line))
-        FI;
-
-        IF op = ophlt THEN
+        IF NOT ok THEN
             running := FALSE
-        ELIF op = opmovimm THEN
-        BEGIN
-            IF cpu.pc + 1 > UPB mem THEN
-                running := FALSE
-            ELSE
-                INT a := mem[cpu.pc];
-                INT imm := mem[cpu.pc + 1];
-                cpu.pc := cpu.pc + 2;
+        ELSE
+            cpu.pc := cpu.pc + 1;
 
-                IF a < LWB cpu.r OR a > UPB cpu.r THEN
+            IF trace THEN
+                put(stand error, ("pc=", whole(pc0, 0),
+                                 " op=", whole(op, 0),
+                                 " r0=", whole(cpu.r[0], 0),
+                                 " r1=", whole(cpu.r[1], 0),
+                                 " r2=", whole(cpu.r[2], 0),
+                                 " r3=", whole(cpu.r[3], 0),
+                                 " sp=", whole(cpu.sp, 0),
+                                 " fp=", whole(cpu.fp, 0),
+                                 " fl=", whole(cpu.fl, 0),
+                                 " jt=", whole(cpu.jt, 0),
+                                 " jc=", whole(cpu.jc, 0),
+                                 " sr=", whole(cpu.sr, 0),
+                                 new line))
+            FI;
+
+            IF op = ophlt THEN
+                running := FALSE
+            ELIF op = opmovimm THEN
+            BEGIN
+                INT a := 0;
+                INT imm := 0;
+
+                BOOL ok1 := mem_read8(mem, cpu.pc, a);
+                BOOL ok2 := mem_read8(mem, cpu.pc + 1, imm);
+
+                IF NOT (ok1 AND ok2) THEN
                     running := FALSE
                 ELSE
-                    cpu.r[a] := imm
-                FI
-            FI
-        END
-        ELIF op = opsys THEN
-        BEGIN
-            IF cpu.pc > UPB mem THEN
-                running := FALSE
-            ELSE
-                INT n := mem[cpu.pc];
-                cpu.pc := cpu.pc + 1;
-                cpu.sr := n;
+                    cpu.pc := cpu.pc + 2;
 
-                IF n = 0 THEN
-                    print((whole(cpu.r[0], 0)))
-                ELIF n = 1 THEN
-                    print((REPR cpu.r[0]))
+                    IF a < LWB cpu.r OR a > UPB cpu.r THEN
+                        running := FALSE
+                    ELSE
+                        cpu.r[a] := imm
+                    FI
                 FI
+            END
+            ELIF op = opsys THEN
+            BEGIN
+                INT n := 0;
+                BOOL ok1 := mem_read8(mem, cpu.pc, n);
+
+                IF NOT ok1 THEN
+                    running := FALSE
+                ELSE
+                    cpu.pc := cpu.pc + 1;
+                    cpu.sr := n;
+
+                    IF n = 0 THEN
+                        print((whole(cpu.r[0], 0)))
+                    ELIF n = 1 THEN
+                        print((REPR cpu.r[0]))
+                    FI
+                FI
+            END
+            ELSE
+                running := FALSE
             FI
-        END
-        ELSE
-            running := FALSE
         FI
     FI
 END;
 
 BEGIN
-    INT memsz := 65536;
+    INT code_sz := 16384;
+    INT data_sz := 16384;
+    INT stack_sz := 16384;
 
-    REF []INT mem;
-    mem := HEAP [0:memsz - 1]INT;
-    memclear(mem);
-
-    INT codesz := 0;
-    BOOL ok := FALSE;
     BOOL trace := FALSE;
+    BOOL have_img := FALSE;
+    STRING img_path := "";
 
     IF argc > 0 THEN
-        FOR i FROM 1 TO argc DO
+        INT i := 1;
+        WHILE i <= argc DO
             STRING arg := argv(i);
+
             IF streq(arg, "--trace") THEN
-                trace := TRUE
-            ELIF NOT ok AND ism68(arg) THEN
-                ok := loadm68(arg, mem, codesz)
+                trace := TRUE;
+                i := i + 1
+            ELIF streq(arg, "--code") THEN
+                IF i + 1 <= argc THEN
+                    INT n;
+                    IF parse_uint(argv(i + 1), n) AND n > 0 THEN
+                        code_sz := n
+                    FI
+                FI;
+                i := i + 2
+            ELIF streq(arg, "--data") THEN
+                IF i + 1 <= argc THEN
+                    INT n;
+                    IF parse_uint(argv(i + 1), n) AND n > 0 THEN
+                        data_sz := n
+                    FI
+                FI;
+                i := i + 2
+            ELIF streq(arg, "--stack") THEN
+                IF i + 1 <= argc THEN
+                    INT n;
+                    IF parse_uint(argv(i + 1), n) AND n > 0 THEN
+                        stack_sz := n
+                    FI
+                FI;
+                i := i + 2
+            ELIF NOT have_img AND ism68(arg) THEN
+                img_path := arg;
+                have_img := TRUE;
+                i := i + 1
+            ELSE
+                i := i + 1
             FI
         OD
     FI;
 
-    IF NOT ok THEN
-        codesz := loaddemo(mem)
-    FI;
+    MEMORYMODEL mem;
+    BOOL mem_ok := meminit(mem, code_sz, data_sz, stack_sz);
 
-    CPUSTATE cpu;
-    cpureset(cpu);
+    IF NOT mem_ok THEN
+        put(stand error, ("bad memory configuration", new line));
+        SKIP
+    ELSE
+        INT codesz := 0;
+        BOOL load_ok := FALSE;
 
-    BOOL running := TRUE;
+        IF have_img THEN
+            load_ok := loadm68(img_path, mem, codesz)
+        FI;
 
-    INT steps := 0;
-    INT maxsteps := 10000000;
+        IF NOT load_ok THEN
+            codesz := loaddemo(mem)
+        FI;
 
-    WHILE running AND steps < maxsteps DO
-        vmstep(cpu, running, mem, trace);
-        steps := steps + 1
-    OD;
+        CPUSTATE cpu;
+        cpureset(cpu, mem);
 
-    IF steps >= maxsteps THEN
-        put(stand error, ("max steps reached", new line))
-    FI;
+        BOOL running := TRUE;
+        INT steps := 0;
+        INT maxsteps := 10000000;
 
-    SKIP
+        WHILE running AND steps < maxsteps DO
+            vmstep(cpu, running, mem, trace);
+            steps := steps + 1
+        OD;
+
+        IF steps >= maxsteps THEN
+            put(stand error, ("max steps reached", new line))
+        FI;
+
+        SKIP
+    FI
 END
