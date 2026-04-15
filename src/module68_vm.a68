@@ -1,6 +1,11 @@
-INT ophlt := 0;
-INT opmovimm := 1;
-INT opsys := 2;
+INT legacyophlt := 0;
+INT legacyopmovimm := 1;
+INT legacyopsys := 2;
+
+INT flagz := 1;
+INT flagn := 2;
+INT flagc := 4;
+INT flagv := 8;
 
 MODE CPUSTATE = STRUCT(
     [0:63]INT r,
@@ -87,8 +92,8 @@ END;
 
 PROC memclear = (REF MEMORYMODEL mem) VOID:
 BEGIN
-    FOR i FROM LWB mem.bytes TO UPB mem.bytes DO
-        mem.bytes[i] := 0
+    FOR i FROM LWB (bytes OF mem) TO UPB (bytes OF mem) DO
+        (bytes OF mem)[i] := 0
     OD
 END;
 
@@ -97,18 +102,18 @@ BEGIN
     IF code_sz <= 0 OR data_sz <= 0 OR stack_sz <= 0 THEN
         FALSE
     ELSE
-        mem.code_base := 0;
-        mem.code_size := code_sz;
+        code_base OF mem := 0;
+        code_size OF mem := code_sz;
 
-        mem.data_base := mem.code_base + mem.code_size;
-        mem.data_size := data_sz;
+        data_base OF mem := code_base OF mem + code_size OF mem;
+        data_size OF mem := data_sz;
 
-        mem.stack_base := mem.data_base + mem.data_size;
-        mem.stack_size := stack_sz;
+        stack_base OF mem := data_base OF mem + data_size OF mem;
+        stack_size OF mem := stack_sz;
 
-        mem.total_size := mem.stack_base + mem.stack_size;
+        total_size OF mem := stack_base OF mem + stack_size OF mem;
 
-        mem.bytes := HEAP [0:mem.total_size - 1]INT;
+        bytes OF mem := HEAP [0:total_size OF mem - 1]INT;
         memclear(mem);
         TRUE
     FI
@@ -119,67 +124,239 @@ PROC in_segment = (INT addr, INT base, INT sz) BOOL:
 
 PROC mem_read8 = (REF MEMORYMODEL mem, INT addr, REF INT v) BOOL:
 BEGIN
-    IF addr < LWB mem.bytes OR addr > UPB mem.bytes THEN
+    IF addr < LWB (bytes OF mem) OR addr > UPB (bytes OF mem) THEN
         FALSE
     ELSE
-        v := mem.bytes[addr];
+        v := (bytes OF mem)[addr];
         TRUE
     FI
 END;
 
 PROC mem_write8 = (REF MEMORYMODEL mem, INT addr, INT v) BOOL:
 BEGIN
-    IF addr < LWB mem.bytes OR addr > UPB mem.bytes THEN
+    IF addr < LWB (bytes OF mem) OR addr > UPB (bytes OF mem) THEN
         FALSE
     ELSE
-        mem.bytes[addr] := v;
+        (bytes OF mem)[addr] := v MOD 256;
         TRUE
+    FI
+END;
+
+PROC fetch_u8 = (REF MEMORYMODEL mem, REF INT pc, REF INT v) BOOL:
+BEGIN
+    BOOL ok := mem_read8(mem, pc, v);
+    IF ok THEN pc := pc + 1 FI;
+    ok
+END;
+
+PROC fetch_u16le = (REF MEMORYMODEL mem, REF INT pc, REF INT v) BOOL:
+BEGIN
+    INT b0 := 0;
+    INT b1 := 0;
+    BOOL ok0 := fetch_u8(mem, pc, b0);
+    BOOL ok1 := FALSE;
+    IF ok0 THEN ok1 := fetch_u8(mem, pc, b1) FI;
+
+    IF ok0 AND ok1 THEN
+        v := b0 + b1 * 256;
+        TRUE
+    ELSE
+        FALSE
+    FI
+END;
+
+PROC fetch_u32le = (REF MEMORYMODEL mem, REF INT pc, REF INT v) BOOL:
+BEGIN
+    INT b0 := 0;
+    INT b1 := 0;
+    INT b2 := 0;
+    INT b3 := 0;
+
+    BOOL ok := fetch_u8(mem, pc, b0);
+    IF ok THEN ok := fetch_u8(mem, pc, b1) FI;
+    IF ok THEN ok := fetch_u8(mem, pc, b2) FI;
+    IF ok THEN ok := fetch_u8(mem, pc, b3) FI;
+
+    IF ok THEN
+        v := b0 + b1 * 256 + b2 * 65536 + b3 * 16777216;
+        TRUE
+    ELSE
+        FALSE
+    FI
+END;
+
+PROC fetch_u64le = (REF MEMORYMODEL mem, REF INT pc, REF INT v) BOOL:
+BEGIN
+    INT b0 := 0;
+    INT b1 := 0;
+    INT b2 := 0;
+    INT b3 := 0;
+    INT b4 := 0;
+    INT b5 := 0;
+    INT b6 := 0;
+    INT b7 := 0;
+
+    BOOL ok := fetch_u8(mem, pc, b0);
+    IF ok THEN ok := fetch_u8(mem, pc, b1) FI;
+    IF ok THEN ok := fetch_u8(mem, pc, b2) FI;
+    IF ok THEN ok := fetch_u8(mem, pc, b3) FI;
+    IF ok THEN ok := fetch_u8(mem, pc, b4) FI;
+    IF ok THEN ok := fetch_u8(mem, pc, b5) FI;
+    IF ok THEN ok := fetch_u8(mem, pc, b6) FI;
+    IF ok THEN ok := fetch_u8(mem, pc, b7) FI;
+
+    IF ok THEN
+        v := b0
+           + b1 * 256
+           + b2 * 65536
+           + b3 * 16777216
+           + b4 * 4294967296
+           + b5 * 1099511627776
+           + b6 * 281474976710656
+           + b7 * 72057594037927936;
+        TRUE
+    ELSE
+        FALSE
+    FI
+END;
+
+PROC mem_read64_mixed = (REF MEMORYMODEL mem, INT addr, REF INT v) BOOL:
+BEGIN
+    INT b0 := 0;
+    INT b1 := 0;
+    INT b2 := 0;
+    INT b3 := 0;
+    INT b4 := 0;
+    INT b5 := 0;
+    INT b6 := 0;
+    INT b7 := 0;
+
+    BOOL ok := mem_read8(mem, addr + 0, b0);
+    IF ok THEN ok := mem_read8(mem, addr + 1, b1) FI;
+    IF ok THEN ok := mem_read8(mem, addr + 2, b2) FI;
+    IF ok THEN ok := mem_read8(mem, addr + 3, b3) FI;
+    IF ok THEN ok := mem_read8(mem, addr + 4, b4) FI;
+    IF ok THEN ok := mem_read8(mem, addr + 5, b5) FI;
+    IF ok THEN ok := mem_read8(mem, addr + 6, b6) FI;
+    IF ok THEN ok := mem_read8(mem, addr + 7, b7) FI;
+
+    IF ok THEN
+        INT c3 := b0 + b1 * 256;
+        INT c2 := b2 + b3 * 256;
+        INT c1 := b4 + b5 * 256;
+        INT c0 := b6 + b7 * 256;
+
+        v := c0
+           + c1 * 65536
+           + c2 * 4294967296
+           + c3 * 281474976710656;
+        TRUE
+    ELSE
+        FALSE
+    FI
+END;
+
+PROC mem_write64_mixed = (REF MEMORYMODEL mem, INT addr, INT v) BOOL:
+BEGIN
+    INT c0 := v MOD 65536;
+    INT x1 := v OVER 65536;
+    INT c1 := x1 MOD 65536;
+    INT x2 := x1 OVER 65536;
+    INT c2 := x2 MOD 65536;
+    INT x3 := x2 OVER 65536;
+    INT c3 := x3 MOD 65536;
+
+    INT b0 := c3 MOD 256;
+    INT b1 := c3 OVER 256;
+    INT b2 := c2 MOD 256;
+    INT b3 := c2 OVER 256;
+    INT b4 := c1 MOD 256;
+    INT b5 := c1 OVER 256;
+    INT b6 := c0 MOD 256;
+    INT b7 := c0 OVER 256;
+
+    BOOL ok := mem_write8(mem, addr + 0, b0);
+    IF ok THEN ok := mem_write8(mem, addr + 1, b1) FI;
+    IF ok THEN ok := mem_write8(mem, addr + 2, b2) FI;
+    IF ok THEN ok := mem_write8(mem, addr + 3, b3) FI;
+    IF ok THEN ok := mem_write8(mem, addr + 4, b4) FI;
+    IF ok THEN ok := mem_write8(mem, addr + 5, b5) FI;
+    IF ok THEN ok := mem_write8(mem, addr + 6, b6) FI;
+    IF ok THEN ok := mem_write8(mem, addr + 7, b7) FI;
+
+    ok
+END;
+
+PROC push64 = (REF CPUSTATE cpu, REF MEMORYMODEL mem, INT v) BOOL:
+BEGIN
+    INT newsp := sp OF cpu - 8;
+    BOOL inb := newsp >= stack_base OF mem AND newsp + 7 < stack_base OF mem + stack_size OF mem;
+
+    IF NOT inb THEN
+        FALSE
+    ELSE
+        BOOL ok := mem_write64_mixed(mem, newsp, v);
+        IF ok THEN sp OF cpu := newsp FI;
+        ok
+    FI
+END;
+
+PROC pop64 = (REF CPUSTATE cpu, REF MEMORYMODEL mem, REF INT v) BOOL:
+BEGIN
+    BOOL inb := sp OF cpu >= stack_base OF mem AND sp OF cpu + 7 < stack_base OF mem + stack_size OF mem;
+
+    IF NOT inb THEN
+        FALSE
+    ELSE
+        BOOL ok := mem_read64_mixed(mem, sp OF cpu, v);
+        IF ok THEN sp OF cpu := sp OF cpu + 8 FI;
+        ok
     FI
 END;
 
 PROC cpureset = (REF CPUSTATE cpu, REF MEMORYMODEL mem) VOID:
 BEGIN
-    FOR i FROM LWB cpu.r TO UPB cpu.r DO
-        cpu.r[i] := 0
+    FOR i FROM LWB (r OF cpu) TO UPB (r OF cpu) DO
+        (r OF cpu)[i] := 0
     OD;
 
-    cpu.sp := mem.stack_base + mem.stack_size;
-    cpu.fp := cpu.sp;
-    cpu.fl := 0;
-    cpu.jt := 0;
-    cpu.jc := 0;
-    cpu.sr := 0;
-    cpu.pc := mem.code_base
+    sp OF cpu := stack_base OF mem + stack_size OF mem;
+    fp OF cpu := sp OF cpu;
+    fl OF cpu := 0;
+    jt OF cpu := 0;
+    jc OF cpu := 0;
+    sr OF cpu := 0;
+    pc OF cpu := code_base OF mem
 END;
 
 PROC loaddemo = (REF MEMORYMODEL mem) INT:
 BEGIN
-    INT p := mem.code_base;
-    INT p_end := mem.code_base + mem.code_size;
+    INT p := code_base OF mem;
+    INT p_end := code_base OF mem + code_size OF mem;
 
     PROC emit = (INT x) VOID:
     BEGIN
         IF p < p_end THEN
-            mem.bytes[p] := x;
+            (bytes OF mem)[p] := x;
             p := p + 1
         FI
     END;
 
-    emit(opmovimm); emit(0); emit(72);
-    emit(opsys); emit(1);
+    emit(legacyopmovimm); emit(0); emit(72);
+    emit(legacyopsys); emit(1);
 
-    emit(opmovimm); emit(0); emit(105);
-    emit(opsys); emit(1);
+    emit(legacyopmovimm); emit(0); emit(105);
+    emit(legacyopsys); emit(1);
 
-    emit(opmovimm); emit(0); emit(10);
-    emit(opsys); emit(1);
+    emit(legacyopmovimm); emit(0); emit(10);
+    emit(legacyopsys); emit(1);
 
-    emit(ophlt);
+    emit(legacyophlt);
 
-    p - mem.code_base
+    p - code_base OF mem
 END;
 
-PROC loadm68 = (STRING path, REF MEMORYMODEL mem, REF INT codesz) BOOL:
+PROC loadm68 = (STRING path, REF MEMORYMODEL mem, REF INT codesz, REF INT version, REF INT flags) BOOL:
 BEGIN
     FILE f;
     INT status := open(f, path, stand in channel);
@@ -215,7 +392,7 @@ BEGIN
         BOOL ok := TRUE;
 
         INT b0, b1, b2, b3;
-        INT ver, flags, szhi, szlo;
+        INT ver, flg, szhi, szlo;
 
         IF ok THEN ok := rd(b0) FI;
         IF ok THEN ok := rd(b1) FI;
@@ -230,7 +407,7 @@ BEGIN
             FALSE
         ELSE
             ok := rd(ver);
-            IF ok THEN ok := rd(flags) FI;
+            IF ok THEN ok := rd(flg) FI;
             IF ok THEN ok := rd(szhi) FI;
             IF ok THEN ok := rd(szlo) FI;
 
@@ -239,8 +416,10 @@ BEGIN
                 FALSE
             ELSE
                 codesz := szhi * 256 + szlo;
+                version := ver;
+                flags := flg;
 
-                IF codesz < 0 OR codesz > mem.code_size THEN
+                IF codesz < 0 OR codesz > code_size OF mem THEN
                     close(f);
                     FALSE
                 ELSE
@@ -249,7 +428,7 @@ BEGIN
                         INT x;
                         ok := rd(x);
                         IF ok THEN
-                            ok := mem_write8(mem, mem.code_base + i, x)
+                            ok := mem_write8(mem, code_base OF mem + i, x)
                         FI;
                         i := i + 1
                     OD;
@@ -262,82 +441,451 @@ BEGIN
     FI
 END;
 
-PROC vmstep = (REF CPUSTATE cpu, REF BOOL running, REF MEMORYMODEL mem, BOOL trace) VOID:
+PROC reg_read = (REF CPUSTATE cpu, INT rs, REF INT v) BOOL:
 BEGIN
-    IF NOT in_segment(cpu.pc, mem.code_base, mem.code_size) THEN
+    INT bank := rs OVER 64;
+    INT idx := rs MOD 64;
+
+    IF bank = 0 THEN
+        IF idx >= LWB (r OF cpu) AND idx <= UPB (r OF cpu) THEN
+            v := (r OF cpu)[idx];
+            TRUE
+        ELSE
+            FALSE
+        FI
+    ELIF bank = 1 THEN
+        IF idx = 0 THEN v := sp OF cpu; TRUE
+        ELIF idx = 1 THEN v := fp OF cpu; TRUE
+        ELIF idx = 2 THEN v := fl OF cpu; TRUE
+        ELIF idx = 3 THEN v := jt OF cpu; TRUE
+        ELIF idx = 4 THEN v := jc OF cpu; TRUE
+        ELIF idx = 5 THEN v := sr OF cpu; TRUE
+        ELSE FALSE
+        FI
+    ELSE
+        FALSE
+    FI
+END;
+
+PROC reg_write = (REF CPUSTATE cpu, INT rs, INT v) BOOL:
+BEGIN
+    INT bank := rs OVER 64;
+    INT idx := rs MOD 64;
+
+    IF bank = 0 THEN
+        IF idx >= LWB (r OF cpu) AND idx <= UPB (r OF cpu) THEN
+            (r OF cpu)[idx] := v;
+            TRUE
+        ELSE
+            FALSE
+        FI
+    ELIF bank = 1 THEN
+        IF idx = 0 THEN sp OF cpu := v; TRUE
+        ELIF idx = 1 THEN fp OF cpu := v; TRUE
+        ELIF idx = 2 THEN fl OF cpu := v; TRUE
+        ELIF idx = 3 THEN jt OF cpu := v; TRUE
+        ELIF idx = 4 THEN jc OF cpu := v; TRUE
+        ELIF idx = 5 THEN sr OF cpu := v; TRUE
+        ELSE FALSE
+        FI
+    ELSE
+        FALSE
+    FI
+END;
+
+PROC cond_true = (REF CPUSTATE cpu) BOOL:
+BEGIN
+    INT c := jc OF cpu MOD 8;
+    BOOL z := (fl OF cpu MOD 2) = 1;
+    BOOL n := ((fl OF cpu OVER 2) MOD 2) = 1;
+    BOOL cf := ((fl OF cpu OVER 4) MOD 2) = 1;
+    BOOL v := ((fl OF cpu OVER 8) MOD 2) = 1;
+
+    IF c = 0 THEN FALSE
+    ELIF c = 1 THEN TRUE
+    ELIF c = 2 THEN z
+    ELIF c = 3 THEN NOT z
+    ELIF c = 4 THEN n
+    ELIF c = 5 THEN cf
+    ELIF c = 6 THEN v
+    ELSE n /= v
+    FI
+END;
+
+PROC exec_sys_new = (REF CPUSTATE cpu, REF BOOL running, REF MEMORYMODEL mem) VOID:
+BEGIN
+    INT n := sr OF cpu;
+
+    IF n = 1 THEN
+        INT fd := (r OF cpu)[1];
+        INT buf := (r OF cpu)[2];
+        INT len := (r OF cpu)[3];
+
+        IF len < 0 THEN
+            (r OF cpu)[0] := -1
+        ELIF fd /= 1 AND fd /= 2 THEN
+            (r OF cpu)[0] := -1
+        ELSE
+            BOOL ok := TRUE;
+            INT i := 0;
+            WHILE ok AND i < len DO
+                INT b := 0;
+                ok := mem_read8(mem, buf + i, b);
+                IF ok THEN
+                    put(stand out, (REPR b))
+                FI;
+                i := i + 1
+            OD;
+
+            IF ok THEN
+                (r OF cpu)[0] := len
+            ELSE
+                (r OF cpu)[0] := -1
+            FI
+        FI
+    ELIF n = 2 THEN
+        (r OF cpu)[0] := (r OF cpu)[1];
         running := FALSE
     ELSE
-        INT pc0 := cpu.pc;
+        (r OF cpu)[0] := -1
+    FI
+END;
+
+PROC exec_legacy = (REF CPUSTATE cpu, REF BOOL running, REF MEMORYMODEL mem, INT op) BOOL:
+BEGIN
+    IF op = legacyophlt THEN
+        running := FALSE;
+        TRUE
+    ELIF op = legacyopmovimm THEN
+        INT a := 0;
+        INT imm := 0;
+        BOOL ok1 := mem_read8(mem, pc OF cpu, a);
+        BOOL ok2 := FALSE;
+        IF ok1 THEN ok2 := mem_read8(mem, pc OF cpu + 1, imm) FI;
+
+        IF NOT (ok1 AND ok2) THEN
+            running := FALSE;
+            TRUE
+        ELSE
+            pc OF cpu := pc OF cpu + 2;
+            IF a < LWB (r OF cpu) OR a > UPB (r OF cpu) THEN
+                running := FALSE
+            ELSE
+                (r OF cpu)[a] := imm
+            FI;
+            TRUE
+        FI
+    ELIF op = legacyopsys THEN
+        INT n := 0;
+        BOOL ok := mem_read8(mem, pc OF cpu, n);
+        IF NOT ok THEN
+            running := FALSE;
+            TRUE
+        ELSE
+            pc OF cpu := pc OF cpu + 1;
+            sr OF cpu := n;
+
+            IF n = 0 THEN
+                print((whole((r OF cpu)[0], 0)))
+            ELIF n = 1 THEN
+                print((REPR (r OF cpu)[0]))
+            ELIF n = 2 THEN
+                running := FALSE
+            FI;
+            TRUE
+        FI
+    ELSE
+        FALSE
+    FI
+END;
+
+PROC vmexec = (REF CPUSTATE cpu, REF BOOL running, REF MEMORYMODEL mem, BOOL trace, BOOL allow_control, BOOL legacy_mode) VOID:
+BEGIN
+    IF NOT running THEN
+        SKIP
+    ELIF NOT in_segment(pc OF cpu, code_base OF mem, code_size OF mem) THEN
+        running := FALSE
+    ELSE
+        INT pc0 := pc OF cpu;
         INT op := 0;
-        BOOL ok := mem_read8(mem, cpu.pc, op);
+        BOOL ok := mem_read8(mem, pc OF cpu, op);
 
         IF NOT ok THEN
             running := FALSE
         ELSE
-            cpu.pc := cpu.pc + 1;
+            pc OF cpu := pc OF cpu + 1;
 
             IF trace THEN
                 put(stand error, ("pc=", whole(pc0, 0),
                                  " op=", whole(op, 0),
-                                 " r0=", whole(cpu.r[0], 0),
-                                 " r1=", whole(cpu.r[1], 0),
-                                 " r2=", whole(cpu.r[2], 0),
-                                 " r3=", whole(cpu.r[3], 0),
-                                 " sp=", whole(cpu.sp, 0),
-                                 " fp=", whole(cpu.fp, 0),
-                                 " fl=", whole(cpu.fl, 0),
-                                 " jt=", whole(cpu.jt, 0),
-                                 " jc=", whole(cpu.jc, 0),
-                                 " sr=", whole(cpu.sr, 0),
+                                 " r0=", whole((r OF cpu)[0], 0),
+                                 " r1=", whole((r OF cpu)[1], 0),
+                                 " r2=", whole((r OF cpu)[2], 0),
+                                 " r3=", whole((r OF cpu)[3], 0),
+                                 " sp=", whole(sp OF cpu, 0),
+                                 " fp=", whole(fp OF cpu, 0),
+                                 " fl=", whole(fl OF cpu, 0),
+                                 " jt=", whole(jt OF cpu, 0),
+                                 " jc=", whole(jc OF cpu, 0),
+                                 " sr=", whole(sr OF cpu, 0),
                                  new line))
             FI;
 
-            IF op = ophlt THEN
-                running := FALSE
-            ELIF op = opmovimm THEN
-            BEGIN
-                INT a := 0;
-                INT imm := 0;
-
-                BOOL ok1 := mem_read8(mem, cpu.pc, a);
-                BOOL ok2 := mem_read8(mem, cpu.pc + 1, imm);
-
-                IF NOT (ok1 AND ok2) THEN
+            IF legacy_mode THEN
+                BOOL handled := exec_legacy(cpu, running, mem, op);
+                IF NOT handled THEN
                     running := FALSE
-                ELSE
-                    cpu.pc := cpu.pc + 2;
+                FI
+            ELSE
+                INT class := op OVER 32;
+                INT subop := (op OVER 4) MOD 8;
+                INT form := op MOD 4;
 
-                    IF a < LWB cpu.r OR a > UPB cpu.r THEN
+                IF class = 0 AND subop = 0 THEN
+                    INT rd := 0;
+                    BOOL okd := fetch_u8(mem, pc OF cpu, rd);
+
+                    IF NOT okd THEN
+                        running := FALSE
+                    ELIF form = 0 THEN
+                        INT rs := 0;
+                        INT sv := 0;
+                        BOOL ok1 := fetch_u8(mem, pc OF cpu, rs);
+                        BOOL ok2 := FALSE;
+                        BOOL ok3 := FALSE;
+                        IF ok1 THEN ok2 := reg_read(cpu, rs, sv) FI;
+                        IF ok2 THEN ok3 := reg_write(cpu, rd, sv) FI;
+                        IF NOT (ok1 AND ok2 AND ok3) THEN running := FALSE FI
+                    ELIF form = 1 THEN
+                        INT imm8 := 0;
+                        BOOL ok1 := fetch_u8(mem, pc OF cpu, imm8);
+                        BOOL ok2 := FALSE;
+                        IF ok1 THEN ok2 := reg_write(cpu, rd, imm8) FI;
+                        IF NOT (ok1 AND ok2) THEN running := FALSE FI
+                    ELIF form = 2 THEN
+                        INT ext := 0;
+                        INT imm := 0;
+                        BOOL ok1 := fetch_u8(mem, pc OF cpu, ext);
+                        BOOL ok2 := FALSE;
+
+                        IF ok1 THEN
+                            INT iw := ext OVER 64;
+                            INT low := ext MOD 64;
+                            IF low /= 0 THEN
+                                ok2 := FALSE
+                            ELIF iw = 1 THEN
+                                ok2 := fetch_u16le(mem, pc OF cpu, imm)
+                            ELIF iw = 2 THEN
+                                ok2 := fetch_u32le(mem, pc OF cpu, imm)
+                            ELSE
+                                ok2 := FALSE
+                            FI
+                        FI;
+
+                        BOOL ok3 := FALSE;
+                        IF ok2 THEN ok3 := reg_write(cpu, rd, imm) FI;
+                        IF NOT (ok1 AND ok2 AND ok3) THEN running := FALSE FI
+                    ELIF form = 3 THEN
+                        INT imm64 := 0;
+                        BOOL ok1 := fetch_u64le(mem, pc OF cpu, imm64);
+                        BOOL ok2 := FALSE;
+                        IF ok1 THEN ok2 := reg_write(cpu, rd, imm64) FI;
+                        IF NOT (ok1 AND ok2) THEN running := FALSE FI
+                    ELSE
+                        running := FALSE
+                    FI
+
+                ELIF class = 0 AND subop = 1 THEN
+                    INT rd := 0;
+                    INT base := 0;
+                    BOOL ok1 := fetch_u8(mem, pc OF cpu, rd);
+                    BOOL ok2 := FALSE;
+                    IF ok1 THEN ok2 := fetch_u8(mem, pc OF cpu, base) FI;
+
+                    IF NOT (ok1 AND ok2) THEN
                         running := FALSE
                     ELSE
-                        cpu.r[a] := imm
-                    FI
-                FI
-            END
-            ELIF op = opsys THEN
-            BEGIN
-                INT n := 0;
-                BOOL ok1 := mem_read8(mem, cpu.pc, n);
+                        INT basev := 0;
+                        BOOL ok3 := reg_read(cpu, base, basev);
 
-                IF NOT ok1 THEN
+                        INT disp := 0;
+                        BOOL ok4 := TRUE;
+
+                        IF form = 0 THEN
+                            disp := 0
+                        ELIF form = 1 THEN
+                            ok4 := fetch_u8(mem, pc OF cpu, disp)
+                        ELIF form = 2 THEN
+                            INT ext := 0;
+                            ok4 := fetch_u8(mem, pc OF cpu, ext);
+                            IF ok4 THEN
+                                INT iw := ext OVER 64;
+                                INT low := ext MOD 64;
+                                IF low /= 0 THEN
+                                    ok4 := FALSE
+                                ELIF iw = 1 THEN
+                                    ok4 := fetch_u16le(mem, pc OF cpu, disp)
+                                ELIF iw = 2 THEN
+                                    ok4 := fetch_u32le(mem, pc OF cpu, disp)
+                                ELSE
+                                    ok4 := FALSE
+                                FI
+                            FI
+                        ELIF form = 3 THEN
+                            ok4 := fetch_u64le(mem, pc OF cpu, disp)
+                        ELSE
+                            ok4 := FALSE
+                        FI;
+
+                        INT addr := basev + disp;
+                        INT word := 0;
+                        BOOL ok5 := FALSE;
+                        IF ok3 AND ok4 THEN ok5 := mem_read64_mixed(mem, addr, word) FI;
+                        BOOL ok6 := FALSE;
+                        IF ok5 THEN ok6 := reg_write(cpu, rd, word) FI;
+
+                        IF NOT (ok3 AND ok4 AND ok5 AND ok6) THEN
+                            running := FALSE
+                        FI
+                    FI
+
+                ELIF class = 0 AND subop = 2 THEN
+                    INT base := 0;
+                    INT rs := 0;
+                    BOOL ok1 := fetch_u8(mem, pc OF cpu, base);
+                    BOOL ok2 := FALSE;
+                    IF ok1 THEN ok2 := fetch_u8(mem, pc OF cpu, rs) FI;
+
+                    IF NOT (ok1 AND ok2) THEN
+                        running := FALSE
+                    ELSE
+                        INT basev := 0;
+                        INT srcv := 0;
+                        BOOL ok3 := reg_read(cpu, base, basev);
+                        BOOL ok4 := FALSE;
+                        IF ok3 THEN ok4 := reg_read(cpu, rs, srcv) FI;
+
+                        INT disp := 0;
+                        BOOL ok5 := TRUE;
+
+                        IF form = 0 THEN
+                            disp := 0
+                        ELIF form = 1 THEN
+                            ok5 := fetch_u8(mem, pc OF cpu, disp)
+                        ELIF form = 2 THEN
+                            INT ext := 0;
+                            ok5 := fetch_u8(mem, pc OF cpu, ext);
+                            IF ok5 THEN
+                                INT iw := ext OVER 64;
+                                INT low := ext MOD 64;
+                                IF low /= 0 THEN
+                                    ok5 := FALSE
+                                ELIF iw = 1 THEN
+                                    ok5 := fetch_u16le(mem, pc OF cpu, disp)
+                                ELIF iw = 2 THEN
+                                    ok5 := fetch_u32le(mem, pc OF cpu, disp)
+                                ELSE
+                                    ok5 := FALSE
+                                FI
+                            FI
+                        ELIF form = 3 THEN
+                            ok5 := fetch_u64le(mem, pc OF cpu, disp)
+                        ELSE
+                            ok5 := FALSE
+                        FI;
+
+                        INT addr := basev + disp;
+                        BOOL ok6 := FALSE;
+                        IF ok4 AND ok5 THEN ok6 := mem_write64_mixed(mem, addr, srcv) FI;
+
+                        IF NOT (ok3 AND ok4 AND ok5 AND ok6) THEN
+                            running := FALSE
+                        FI
+                    FI
+
+                ELIF class = 3 AND form = 0 AND (subop = 0 OR subop = 1 OR subop = 2) THEN
+                    IF NOT allow_control THEN
+                        running := FALSE
+                    ELSE
+                        BOOL do_jump := FALSE;
+                        INT target := 0;
+                        BOOL have_target := TRUE;
+                        BOOL post_call_push := FALSE;
+
+                        IF subop = 0 THEN
+                            do_jump := cond_true(cpu);
+                            target := jt OF cpu
+                        ELIF subop = 1 THEN
+                            do_jump := TRUE;
+                            target := jt OF cpu;
+                            post_call_push := TRUE
+                        ELSE
+                            do_jump := TRUE;
+                            have_target := pop64(cpu, mem, target)
+                        FI;
+
+                        IF have_target AND running THEN
+                            vmexec(cpu, running, mem, trace, FALSE, legacy_mode)
+                        ELSE
+                            running := FALSE
+                        FI;
+
+                        IF running THEN
+                            IF post_call_push THEN
+                                BOOL okpush := push64(cpu, mem, pc OF cpu);
+                                IF NOT okpush THEN
+                                    running := FALSE
+                                FI
+                            FI
+                        FI;
+
+                        IF running AND do_jump THEN
+                            pc OF cpu := target
+                        FI
+                    FI
+
+                ELIF class = 3 AND subop = 3 AND form = 0 THEN
                     running := FALSE
-                ELSE
-                    cpu.pc := cpu.pc + 1;
-                    cpu.sr := n;
 
-                    IF n = 0 THEN
-                        print((whole(cpu.r[0], 0)))
-                    ELIF n = 1 THEN
-                        print((REPR cpu.r[0]))
+                ELIF class = 4 AND subop = 0 AND form = 0 THEN
+                    INT rs := 0;
+                    BOOL ok1 := fetch_u8(mem, pc OF cpu, rs);
+                    INT v := 0;
+                    BOOL ok2 := FALSE;
+                    IF ok1 THEN ok2 := reg_read(cpu, rs, v) FI;
+                    BOOL ok3 := FALSE;
+                    IF ok2 THEN ok3 := push64(cpu, mem, v) FI;
+
+                    IF NOT (ok1 AND ok2 AND ok3) THEN
+                        running := FALSE
                     FI
+
+                ELIF class = 4 AND subop = 1 AND form = 0 THEN
+                    INT rd := 0;
+                    BOOL ok1 := fetch_u8(mem, pc OF cpu, rd);
+                    INT v := 0;
+                    BOOL ok2 := FALSE;
+                    IF ok1 THEN ok2 := pop64(cpu, mem, v) FI;
+                    BOOL ok3 := FALSE;
+                    IF ok2 THEN ok3 := reg_write(cpu, rd, v) FI;
+
+                    IF NOT (ok1 AND ok2 AND ok3) THEN
+                        running := FALSE
+                    FI
+
+                ELIF class = 6 AND subop = 0 AND form = 0 THEN
+                    exec_sys_new(cpu, running, mem)
+
+                ELSE
+                    running := FALSE
                 FI
-            END
-            ELSE
-                running := FALSE
             FI
         FI
     FI
 END;
+
+PROC vmstep = (REF CPUSTATE cpu, REF BOOL running, REF MEMORYMODEL mem, BOOL trace, BOOL legacy_mode) VOID:
+    vmexec(cpu, running, mem, trace, TRUE, legacy_mode);
 
 BEGIN
     INT code_sz := 16384;
@@ -398,15 +946,21 @@ BEGIN
         SKIP
     ELSE
         INT codesz := 0;
+        INT ver := 1;
+        INT flags := 0;
         BOOL load_ok := FALSE;
 
         IF have_img THEN
-            load_ok := loadm68(img_path, mem, codesz)
+            load_ok := loadm68(img_path, mem, codesz, ver, flags)
         FI;
 
         IF NOT load_ok THEN
-            codesz := loaddemo(mem)
+            codesz := loaddemo(mem);
+            ver := 1;
+            flags := 0
         FI;
+
+        BOOL legacy_mode := (flags MOD 2) = 0;
 
         CPUSTATE cpu;
         cpureset(cpu, mem);
@@ -416,7 +970,7 @@ BEGIN
         INT maxsteps := 10000000;
 
         WHILE running AND steps < maxsteps DO
-            vmstep(cpu, running, mem, trace);
+            vmstep(cpu, running, mem, trace, legacy_mode);
             steps := steps + 1
         OD;
 
