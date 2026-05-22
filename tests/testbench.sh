@@ -75,6 +75,38 @@ run_case() {
   esac
 }
 
+run_jc_case() {
+  name=$1
+  jc=$2
+  fl=$3
+  expected_hex=$4
+
+  run_case "$name" "$expected_hex" \
+    3 10 128 0 0 0 0 0 0 0 \
+    3 67 64 0 0 0 0 0 0 0 \
+    1 68 "$jc" \
+    1 66 "$fl" \
+    1 11 70 \
+    96 \
+    1 12 1 \
+    8 10 11 \
+    1 1 1 \
+    1 2 134 \
+    1 3 1 \
+    1 69 1 \
+    192 \
+    108 \
+    108 108 108 108 108 108 108 108 108 108 108 108 108 108 \
+    1 11 84 \
+    8 10 11 \
+    1 1 1 \
+    1 2 134 \
+    1 3 1 \
+    1 69 1 \
+    192 \
+    108
+}
+
 run_case "jp_delay_slot_jc_jt" "42" \
   2 10 128 0 64 0 0 \
   1 11 65 \
@@ -150,6 +182,63 @@ run_case "tagged_pair_layout" "0201040306050b071211141316151817" \
   1 69 2 \
   192 \
   108
+
+run_case "mixed_endian_alt_roundtrip" "117f332255447766" \
+  2 10 128 0 64 0 0 \
+  3 11 119 102 85 68 51 34 17 127 \
+  8 10 11 \
+  4 12 10 \
+  9 10 12 8 \
+  1 1 1 \
+  2 2 128 8 64 0 0 \
+  1 3 8 \
+  1 69 1 \
+  192 \
+  1 1 0 \
+  1 69 2 \
+  192 \
+  108
+
+run_case "jp_delay_slot_target_snapshot" "41" \
+  3 10 128 0 0 0 0 0 0 0 \
+  3 67 96 0 0 0 0 0 0 0 \
+  1 68 1 \
+  96 \
+  3 67 64 0 0 0 0 0 0 0 \
+  108 \
+  108 108 108 108 108 108 108 108 108 108 108 108 108 108 108 108 108 108 108 108 108 108 108 108 108 108 108 108 108 \
+  1 11 66 \
+  8 10 11 \
+  1 1 1 \
+  1 2 134 \
+  1 3 1 \
+  1 69 1 \
+  192 \
+  108 \
+  108 108 108 108 108 108 108 108 108 108 108 108 \
+  1 11 65 \
+  8 10 11 \
+  1 1 1 \
+  1 2 134 \
+  1 3 1 \
+  1 69 1 \
+  192 \
+  108
+
+run_jc_case "jc0_never" 0 0 "46"
+run_jc_case "jc1_always" 1 0 "54"
+run_jc_case "jc2_z_false" 2 0 "46"
+run_jc_case "jc2_z_true" 2 1 "54"
+run_jc_case "jc3_nz_false" 3 1 "46"
+run_jc_case "jc3_nz_true" 3 0 "54"
+run_jc_case "jc4_n_false" 4 0 "46"
+run_jc_case "jc4_n_true" 4 2 "54"
+run_jc_case "jc5_c_false" 5 0 "46"
+run_jc_case "jc5_c_true" 5 4 "54"
+run_jc_case "jc6_v_false" 6 0 "46"
+run_jc_case "jc6_v_true" 6 8 "54"
+run_jc_case "jc7_nxorv_false" 7 10 "46"
+run_jc_case "jc7_nxorv_true" 7 2 "54"
 
 echo
 echo "Summary: PASS=$PASS FAIL=$FAIL"

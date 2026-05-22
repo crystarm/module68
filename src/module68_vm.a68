@@ -891,6 +891,7 @@ BEGIN
     INT code_sz := 16384;
     INT data_sz := 16384;
     INT stack_sz := 16384;
+    INT maxsteps := 10000000;
 
     BOOL trace := FALSE;
     BOOL have_img := FALSE;
@@ -925,6 +926,14 @@ BEGIN
                     INT n;
                     IF parse_uint(argv(i + 1), n) AND n > 0 THEN
                         stack_sz := n
+                    FI
+                FI;
+                i := i + 2
+            ELIF streq(arg, "--max-steps") THEN
+                IF i + 1 <= argc THEN
+                    INT n;
+                    IF parse_uint(argv(i + 1), n) AND n > 0 THEN
+                        maxsteps := n
                     FI
                 FI;
                 i := i + 2
@@ -967,7 +976,6 @@ BEGIN
 
         BOOL running := TRUE;
         INT steps := 0;
-        INT maxsteps := 10000000;
 
         WHILE running AND steps < maxsteps DO
             vmstep(cpu, running, mem, trace, legacy_mode);
