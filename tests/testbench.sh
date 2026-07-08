@@ -3,6 +3,7 @@ set -eu
 
 ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 VM_SRC="$ROOT_DIR/src/module68_vm.a68"
+ASM_SRC="$ROOT_DIR/src/module68_asm.a68"
 
 if ! command -v a68g >/dev/null 2>&1; then
   echo "SKIP: a68g не найден в PATH" >&2
@@ -11,6 +12,11 @@ fi
 
 if [ ! -f "$VM_SRC" ]; then
   echo "ERROR: не найден VM source: $VM_SRC" >&2
+  exit 2
+fi
+
+if [ ! -f "$ASM_SRC" ]; then
+  echo "ERROR: не найден assembler source: $ASM_SRC" >&2
   exit 2
 fi
 
@@ -75,6 +81,62 @@ run_case() {
   esac
 }
 
+run_asm_case() {
+  name=$1
+  expected_hex=$2
+  shift 2
+
+  asm_file="$TMPDIR/${name}.asm"
+  img="$TMPDIR/${name}.m68"
+  out_bin="$TMPDIR/${name}.out"
+  asm_log="$TMPDIR/${name}.asm.log"
+  err_log="$TMPDIR/${name}.err"
+
+  rm -f "$img"
+
+  {
+    for line in "$@"; do
+      printf "%s\n" "$line"
+    done
+  } >"$asm_file"
+
+  if ! (cd "$ROOT_DIR" && a68g src/module68_asm.a68 -- "$asm_file" "$img" >"$asm_log" 2>&1); then
+    FAIL=$((FAIL + 1))
+    echo "FAIL: $name (assembler execution error)"
+    sed -n '1,120p' "$asm_log" >&2 || true
+    return
+  fi
+
+  if [ ! -f "$img" ]; then
+    FAIL=$((FAIL + 1))
+    echo "FAIL: $name (assembler did not create output image)"
+    sed -n '1,120p' "$asm_log" >&2 || true
+    return
+  fi
+
+  if ! (cd "$ROOT_DIR" && a68g src/module68_vm.a68 -- "$img" >"$out_bin" 2>"$err_log"); then
+    FAIL=$((FAIL + 1))
+    echo "FAIL: $name (VM execution error)"
+    sed -n '1,120p' "$err_log" >&2 || true
+    return
+  fi
+
+  got_hex=$(od -An -tx1 -v "$out_bin" | tr -d ' \n')
+
+  case "$got_hex" in
+    *"$expected_hex")
+      PASS=$((PASS + 1))
+      echo "PASS: $name"
+      ;;
+    *)
+      FAIL=$((FAIL + 1))
+      echo "FAIL: $name"
+      echo "  expected suffix: $expected_hex"
+      echo "  got            : $got_hex"
+      ;;
+  esac
+}
+
 run_jc_case() {
   name=$1
   jc=$2
@@ -106,6 +168,11 @@ run_jc_case() {
     192 \
     108
 }
+
+run_asm_case "asm_creates_missing_output" "4f" \
+  "mov r0, 79" \
+  "sys 1" \
+  "halt"
 
 run_case "jp_delay_slot_jc_jt" "42" \
   2 10 128 0 64 0 0 \

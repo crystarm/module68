@@ -171,6 +171,10 @@ BEGIN
     INT status := open(out, outpath, stand out channel);
 
     IF status /= 0 THEN
+        status := establish(out, outpath, stand out channel)
+    FI;
+
+    IF status /= 0 THEN
         put(stand error, ("cannot open output ", outpath, new line));
         FALSE
     ELSE
