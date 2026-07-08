@@ -6,17 +6,17 @@ VM_SRC="$ROOT_DIR/src/module68_vm.a68"
 ASM_SRC="$ROOT_DIR/src/module68_asm.a68"
 
 if ! command -v a68g >/dev/null 2>&1; then
-  echo "SKIP: a68g не найден в PATH" >&2
+  echo "SKIP: a68g not found in PATH" >&2
   exit 77
 fi
 
 if [ ! -f "$VM_SRC" ]; then
-  echo "ERROR: не найден VM source: $VM_SRC" >&2
+  echo "ERROR: VM source not found: $VM_SRC" >&2
   exit 2
 fi
 
 if [ ! -f "$ASM_SRC" ]; then
-  echo "ERROR: не найден assembler source: $ASM_SRC" >&2
+  echo "ERROR: assembler source not found: $ASM_SRC" >&2
   exit 2
 fi
 
